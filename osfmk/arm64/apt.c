@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Apple, Inc. All rights reserved.
+ * Copyright (c) 2025 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,30 +26,30 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <vm/vm_memtag.h>
-
-#if defined(ENABLE_MEMTAG_MANIPULATION_API)
+#include <arm/cpu_data_internal.h>
+#include <mach/mach_types.h>
+#include <mach/mach_traps.h>
+#include <mach/mach_vm.h>
 #include <vm/vm_map_xnu.h>
-#include <vm/pmap.h>
+#include <vm/vm_map_internal.h>
+#include <vm/vm_pageout_internal.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_object_internal.h>
 
-/* Do the right canonicalization based on the vm_map the address belongs to */
-vm_map_address_t
-vm_memtag_canonicalize(vm_map_t map, vm_map_address_t addr)
+// fixme: rdar://114299113 tracks resolving the supportlib issue with hwtrace features
+
+
+bool
+apt_allocate_va_buffer(__unused size_t allocation_size, vm_map_offset_t *__unused ret_mapped_addr, upl_t *__unused ret_upl);
+bool
+apt_allocate_va_buffer(__unused size_t allocation_size, vm_map_offset_t *__unused ret_mapped_addr, upl_t *__unused ret_upl)
 {
-	assert(map);
-
-	/* With no pmap assigned we cannot make a decision. Leave the address as is */
-	if (map->pmap == NULL) {
-		return addr;
-	}
-
-	/* NULL is a frequent enough special case. */
-	if (addr == (vm_map_address_t)NULL) {
-		return addr;
-	}
-
-	return (map->pmap == kernel_pmap) ?
-	       (vm_map_address_t)vm_memtag_canonicalize_kernel(addr) :
-	       (vm_map_address_t)vm_memtag_canonicalize_user(addr);
+	return false;
 }
-#endif /* ENABLE_MEMTAG_MANIPULATION_API */
+
+void
+apt_free_va_buffer(__unused size_t allocation_size, __unused vm_map_offset_t mapped_addr, __unused upl_t upl);
+void
+apt_free_va_buffer(__unused size_t allocation_size, __unused vm_map_offset_t mapped_addr, __unused upl_t upl)
+{
+}

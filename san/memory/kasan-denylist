@@ -37,7 +37,7 @@ src:./san/memory/kasan.c
 src:./san/memory/kasan-fakestack.c
 src:./san/memory/kasan-x86_64.c
 src:./san/memory/kasan-memintrinsics.c
-src:./san/memory/kasan_dynamic_blacklist.c
+src:./san/memory/kasan_dynamic_denylist.c
 src:./san/memory/kasan-classic.c
 src:./san/memory/kasan-tbi.c
 src:./san/memory/kasan-helper.c

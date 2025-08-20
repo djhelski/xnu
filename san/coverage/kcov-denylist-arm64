@@ -1,4 +1,4 @@
-# ARM64 specific blacklist
+# ARM64 specific denylist
 
 # Exclude KASan runtime
 src:./osfmk/arm/machine_routines_common.c

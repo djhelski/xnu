@@ -17,14 +17,14 @@
 #include "kasan.h"
 #include "kasan_internal.h"
 
-#if KASAN_DYNAMIC_BLACKLIST
+#if KASAN_DYNAMIC_DENYLIST
 
 #define MAX_FRAMES 8
 #define HASH_NBUCKETS 128U
 #define HASH_MASK (HASH_NBUCKETS-1)
 #define HASH_CACHE_NENTRIES 128
 
-struct blacklist_entry {
+struct denylist_entry {
 	const char *kext_name;
 	const char *func_name;
 	access_t type_mask;
@@ -33,47 +33,47 @@ struct blacklist_entry {
 	uint64_t count;
 };
 
-#include "kasan_blacklist_dynamic.h"
-/* defines 'blacklist' and 'blacklist_entries' */
+#include "kasan_denylist_dynamic.h"
+/* defines 'denylist' and 'denylist_entries' */
 
-decl_simple_lock_data(static, _dybl_lock);
-static access_t blacklisted_types; /* bitmap of access types with blacklist entries */
+decl_simple_lock_data(static, _dyn_denylist_lock);
+static access_t denylisted_types; /* bitmap of access types with denylist entries */
 
 static void
-dybl_lock(boolean_t *b)
+dyn_denylist_lock(boolean_t *b)
 {
 	*b = ml_set_interrupts_enabled(false);
-	simple_lock(&_dybl_lock, LCK_GRP_NULL);
+	simple_lock(&_dyn_denylist_lock, LCK_GRP_NULL);
 }
 
 static void
-dybl_unlock(boolean_t b)
+dyn_denylist_unlock(boolean_t b)
 {
-	simple_unlock(&_dybl_lock);
+	simple_unlock(&_dyn_denylist_lock);
 	ml_set_interrupts_enabled(b);
 }
 
 
 /*
- * blacklist call site hash table
+ * denylist call site hash table
  */
 
-struct blacklist_hash_entry {
-	SLIST_ENTRY(blacklist_hash_entry) chain; // next element in chain
-	struct blacklist_entry *ble;             // blacklist entry that this caller is an instance of
+struct denylist_hash_entry {
+	SLIST_ENTRY(denylist_hash_entry) chain; // next element in chain
+	struct denylist_entry *dle;             // denylist entry that this caller is an instance of
 	uintptr_t addr;                          // callsite address
 	uint64_t count;                          // hit count
 };
 
 struct hash_chain_head {
-	SLIST_HEAD(, blacklist_hash_entry);
+	SLIST_HEAD(, denylist_hash_entry);
 };
 
 unsigned cache_next_entry = 0;
-struct blacklist_hash_entry blhe_cache[HASH_CACHE_NENTRIES];
+struct denylist_hash_entry dlhe_cache[HASH_CACHE_NENTRIES];
 struct hash_chain_head hash_buckets[HASH_NBUCKETS];
 
-static struct blacklist_hash_entry *
+static struct denylist_hash_entry *
 alloc_hash_entry(void)
 {
 	unsigned idx = cache_next_entry++;
@@ -81,7 +81,7 @@ alloc_hash_entry(void)
 		cache_next_entry = HASH_CACHE_NENTRIES; // avoid overflow
 		return NULL;
 	}
-	return &blhe_cache[idx];
+	return &dlhe_cache[idx];
 }
 
 static unsigned
@@ -91,38 +91,38 @@ hash_addr(uintptr_t addr)
 	return (unsigned)addr & HASH_MASK;
 }
 
-static struct blacklist_hash_entry *
-blacklist_hash_lookup(uintptr_t addr)
+static struct denylist_hash_entry *
+denylist_hash_lookup(uintptr_t addr)
 {
 	unsigned idx = hash_addr(addr);
-	struct blacklist_hash_entry *blhe;
+	struct denylist_hash_entry *dlhe;
 
-	SLIST_FOREACH(blhe, &hash_buckets[idx], chain) {
-		if (blhe->addr == addr) {
-			return blhe;
+	SLIST_FOREACH(dlhe, &hash_buckets[idx], chain) {
+		if (dlhe->addr == addr) {
+			return dlhe;
 		}
 	}
 
 	return NULL;
 }
 
-static struct blacklist_hash_entry *
-blacklist_hash_add(uintptr_t addr, struct blacklist_entry *ble)
+static struct denylist_hash_entry *
+denylist_hash_add(uintptr_t addr, struct denylist_entry *dle)
 {
 	unsigned idx = hash_addr(addr);
 
-	struct blacklist_hash_entry *blhe = alloc_hash_entry();
-	if (!blhe) {
+	struct denylist_hash_entry *dlhe = alloc_hash_entry();
+	if (!dlhe) {
 		return NULL;
 	}
 
-	blhe->ble = ble;
-	blhe->addr = addr;
-	blhe->count = 1;
+	dlhe->dle = dle;
+	dlhe->addr = addr;
+	dlhe->count = 1;
 
-	SLIST_INSERT_HEAD(&hash_buckets[idx], blhe, chain);
+	SLIST_INSERT_HEAD(&hash_buckets[idx], dlhe, chain);
 
-	return blhe;
+	return dlhe;
 }
 
 static void
@@ -130,7 +130,7 @@ hash_drop(void)
 {
 	if (cache_next_entry > 0) {
 		bzero(&hash_buckets, sizeof(hash_buckets));
-		bzero(&blhe_cache, sizeof(struct blacklist_hash_entry) * cache_next_entry);
+		bzero(&dlhe_cache, sizeof(struct denylist_hash_entry) * cache_next_entry);
 		cache_next_entry = 0;
 	}
 }
@@ -146,7 +146,7 @@ struct range_tree_entry {
 
 	struct {
 		uint64_t size : 63;
-		uint64_t accessed : 1; // blacklist entry exists in this range
+		uint64_t accessed : 1; // denylist entry exists in this range
 	};
 
 	/* kext name */
@@ -187,7 +187,7 @@ RB_GENERATE(range_tree, range_tree_entry, tree, range_tree_cmp);
 
 /* for each executable section, insert a range tree entry */
 void
-kasan_dybl_load_kext(uintptr_t addr, const char *kextname)
+kasan_dyn_denylist_load_kext(uintptr_t addr, const char *kextname)
 {
 	int i;
 
@@ -217,9 +217,9 @@ kasan_dybl_load_kext(uintptr_t addr, const char *kextname)
 				e->mh = mh;
 
 				boolean_t flag;
-				dybl_lock(&flag);
+				dyn_denylist_lock(&flag);
 				RB_INSERT(range_tree, &range_tree_root, e);
-				dybl_unlock(flag);
+				dyn_denylist_unlock(flag);
 			}
 		}
 
@@ -228,7 +228,7 @@ kasan_dybl_load_kext(uintptr_t addr, const char *kextname)
 }
 
 void
-kasan_dybl_unload_kext(uintptr_t addr)
+kasan_dyn_denylist_unload_kext(uintptr_t addr)
 {
 	int i;
 
@@ -251,16 +251,16 @@ kasan_dybl_unload_kext(uintptr_t addr)
 				struct range_tree_entry key = { .base = seg->vmaddr, .size = 0 };
 				struct range_tree_entry *e;
 				boolean_t flag;
-				dybl_lock(&flag);
+				dyn_denylist_lock(&flag);
 				e = RB_FIND(range_tree, &range_tree_root, &key);
 				if (e) {
 					RB_REMOVE(range_tree, &range_tree_root, e);
 					if (e->accessed) {
-						/* there was a blacklist entry in this range */
+						/* there was a denylist entry in this range */
 						hash_drop();
 					}
 				}
-				dybl_unlock(flag);
+				dyn_denylist_unlock(flag);
 
 				kfree_type(struct range_tree_entry, e);
 			}
@@ -347,7 +347,7 @@ addr_to_func(uintptr_t addr, const kernel_mach_header_t *mh)
 }
 
 bool OS_NOINLINE
-kasan_is_blacklisted(access_t type)
+kasan_is_denylisted(access_t type)
 {
 	uint32_t nframes = 0;
 	uintptr_t frames[MAX_FRAMES];
@@ -355,8 +355,8 @@ kasan_is_blacklisted(access_t type)
 
 	assert(__builtin_popcount(type) == 1);
 
-	if ((type & blacklisted_types) == 0) {
-		/* early exit for types with no blacklist entries */
+	if ((type & denylisted_types) == 0) {
+		/* early exit for types with no denylist entries */
 		return false;
 	}
 
@@ -372,25 +372,25 @@ kasan_is_blacklisted(access_t type)
 		bt += 1;
 	}
 
-	struct blacklist_hash_entry *blhe = NULL;
+	struct denylist_hash_entry *dlhe = NULL;
 
-	dybl_lock(&flag);
+	dyn_denylist_lock(&flag);
 
 	/* First check if any frame hits in the hash */
 	for (uint32_t i = 0; i < nframes; i++) {
-		blhe = blacklist_hash_lookup(bt[i]);
-		if (blhe) {
-			if ((blhe->ble->type_mask & type) != type) {
+		dlhe = denylist_hash_lookup(bt[i]);
+		if (dlhe) {
+			if ((dlhe->dle->type_mask & type) != type) {
 				/* wrong type */
 				continue;
 			}
 
 			/* hit */
-			blhe->count++;
-			blhe->ble->count++;
-			// printf("KASan: blacklist cache hit (%s:%s [0x%lx] 0x%x)\n",
-			//              ble->kext_name ?: "" , ble->func_name ?: "", VM_KERNEL_UNSLIDE(bt[i]), mask);
-			dybl_unlock(flag);
+			dlhe->count++;
+			dlhe->dle->count++;
+			// printf("KASan: denylist cache hit (%s:%s [0x%lx] 0x%x)\n",
+			//              dle->kext_name ?: "" , dle->func_name ?: "", VM_KERNEL_UNSLIDE(bt[i]), mask);
+			dyn_denylist_unlock(flag);
 			return true;
 		}
 	}
@@ -421,35 +421,35 @@ kasan_is_blacklisted(access_t type)
 
 		// printf("%s: a = 0x%016lx,0x%016lx f = %s, k = %s\n", __func__, bt[i], VM_KERNEL_UNSLIDE(bt[i]), funcname, kextname);
 
-		/* check if kextname or funcname are in the blacklist */
-		for (size_t j = 0; j < blacklist_entries; j++) {
-			struct blacklist_entry *ble = &blacklist[j];
+		/* check if kextname or funcname are in the denylist */
+		for (size_t j = 0; j < denylist_entries; j++) {
+			struct denylist_entry *dle = &denylist[j];
 			uint64_t count;
 
-			if ((ble->type_mask & type) != type) {
+			if ((dle->type_mask & type) != type) {
 				/* wrong type */
 				continue;
 			}
 
-			if (ble->kext_name && kextname && strncmp(kextname, ble->kext_name, KMOD_MAX_NAME) != 0) {
+			if (dle->kext_name && kextname && strncmp(kextname, dle->kext_name, KMOD_MAX_NAME) != 0) {
 				/* wrong kext name */
 				continue;
 			}
 
-			if (ble->func_name && funcname && strncmp(funcname, ble->func_name, 128) != 0) {
+			if (dle->func_name && funcname && strncmp(funcname, dle->func_name, 128) != 0) {
 				/* wrong func name */
 				continue;
 			}
 
 			/* found a matching function or kext */
-			blhe = blacklist_hash_add(bt[i], ble);
-			count = ble->count++;
+			dlhe = denylist_hash_add(bt[i], dle);
+			count = dle->count++;
 			e->accessed = 1;
 
-			dybl_unlock(flag);
+			dyn_denylist_unlock(flag);
 
 			if (count == 0) {
-				printf("KASan: ignoring blacklisted violation (%s:%s [0x%lx] %d 0x%x)\n",
+				printf("KASan: ignoring denylisted violation (%s:%s [0x%lx] %d 0x%x)\n",
 				    kextname, funcname, VM_KERNEL_UNSLIDE(bt[i]), i, type);
 			}
 
@@ -457,18 +457,18 @@ kasan_is_blacklisted(access_t type)
 		}
 	}
 
-	dybl_unlock(flag);
+	dyn_denylist_unlock(flag);
 	return false;
 }
 
 static void
-add_blacklist_entry(const char *kext, const char *func, access_t type)
+add_denylist_entry(const char *kext, const char *func, access_t type)
 {
 	assert(kext || func);
-	struct blacklist_entry *ble = &blacklist[blacklist_entries++];
+	struct denylist_entry *dle = &denylist[denylist_entries++];
 
-	if (blacklist_entries > blacklist_max_entries) {
-		panic("KASan: dynamic blacklist entries exhausted");
+	if (denylist_entries > denylist_max_entries) {
+		panic("KASan: dynamic denylist entries exhausted");
 	}
 
 	if (kext) {
@@ -476,7 +476,7 @@ add_blacklist_entry(const char *kext, const char *func, access_t type)
 		if (sz > 1) {
 			char *s = zalloc_permanent(sz, ZALIGN_NONE);
 			__nosan_strlcpy(s, kext, sz);
-			ble->kext_name = s;
+			dle->kext_name = s;
 		}
 	}
 
@@ -485,11 +485,11 @@ add_blacklist_entry(const char *kext, const char *func, access_t type)
 		if (sz > 1) {
 			char *s = zalloc_permanent(sz, ZALIGN_NONE);
 			__nosan_strlcpy(s, func, sz);
-			ble->func_name = s;
+			dle->func_name = s;
 		}
 	}
 
-	ble->type_mask = type;
+	dle->type_mask = type;
 }
 
 #define TS(x) { .type = TYPE_##x, .str = #x }
@@ -540,17 +540,17 @@ map_type(const char *str)
 		}
 	}
 
-	printf("KASan: unknown blacklist type `%s', assuming `normal'\n", str);
+	printf("KASan: unknown denylist type `%s', assuming `normal'\n", str);
 	return TYPE_NORMAL;
 }
 
 void
-kasan_init_dybl(void)
+kasan_init_dyn_denylist(void)
 {
-	simple_lock_init(&_dybl_lock, 0);
+	simple_lock_init(&_dyn_denylist_lock, 0);
 
 	/*
-	 * dynamic blacklist entries via boot-arg. Syntax is:
+	 * dynamic denylist entries via boot-arg. Syntax is:
 	 *  kasan.bl=kext1:func1:type1,kext2:func2:type2,...
 	 */
 	char buf[256] = {};
@@ -568,24 +568,24 @@ kasan_init_dybl(void)
 				*typestr++ = 0;
 				type = map_type(typestr);
 			}
-			add_blacklist_entry(kext, func, type);
+			add_denylist_entry(kext, func, type);
 		}
 	}
 
-	/* collect bitmask of blacklisted types */
-	for (size_t j = 0; j < blacklist_entries; j++) {
-		struct blacklist_entry *ble = &blacklist[j];
-		blacklisted_types |= ble->type_mask;
+	/* collect bitmask of denylisted types */
+	for (size_t j = 0; j < denylist_entries; j++) {
+		struct denylist_entry *dle = &denylist[j];
+		denylisted_types |= dle->type_mask;
 	}
 
 	/* add the fake kernel kext */
-	kasan_dybl_load_kext((uintptr_t)&_mh_execute_header, "__kernel__");
+	kasan_dyn_denylist_load_kext((uintptr_t)&_mh_execute_header, "__kernel__");
 }
 
-#else /* KASAN_DYNAMIC_BLACKLIST */
+#else /* KASAN_DYNAMIC_DENYLIST */
 
 bool
-kasan_is_blacklisted(access_t __unused type)
+kasan_is_denylisted(access_t __unused type)
 {
 	return false;
 }

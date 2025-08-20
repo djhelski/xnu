@@ -9,7 +9,7 @@ def type_map(x):
 
 
 def print_preamble():
-    print(r'struct blacklist_entry blacklist[] = {')
+    print(r'struct denylist_entry denylist[] = {')
 
 
 def print_entry(kext, func, type):
@@ -36,8 +36,8 @@ def print_postamble(nentries, extra_entries):
 
     print("};\n")
 
-    print('static size_t blacklist_entries = {};'.format(nentries))
-    print('static const size_t blacklist_max_entries = {};'.format(
+    print('static size_t denylist_entries = {};'.format(nentries))
+    print('static const size_t denylist_max_entries = {};'.format(
         nentries + extra_entries))
 
 

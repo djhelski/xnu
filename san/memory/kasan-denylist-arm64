@@ -1,6 +1,6 @@
 #!special-case-list-v1
 # rdar://139815990
-# ARM64 specific blacklist
+# ARM64 specific denylist
 
 [kernel-hwaddress|address]
 

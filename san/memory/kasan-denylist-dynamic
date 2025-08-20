@@ -14,5 +14,5 @@
 __kernel__:_ZN6OSKext8copyInfoEP7OSArray:memr
 
 # For unit-testing KASan
-__kernel__:test_blacklist:test
-__kernel__:test_blacklist_str:memr
+__kernel__:test_denylist:test
+__kernel__:test_denylist_str:memr

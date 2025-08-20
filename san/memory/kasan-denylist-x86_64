@@ -1,4 +1,8 @@
-# x86_64 specific blacklist
+#!special-case-list-v1
+# rdar://139815990
+# x86_64 specific denylist
+
+[address]
 
 # Early boot AUTOGEN
 src:./bsd/kern/kdebug.c
@@ -21,8 +25,6 @@ src:./osfmk/i386/rtclock.c
 src:./osfmk/i386/vmx/vmx_cpu.c
 src:./osfmk/kern/lock_mtx.c
 src:./osfmk/kern/locks.c
-# sumac, x86, boostrap 2nd+ CPU
-src:./osfmk/kern/processor.c
 src:./osfmk/prng/prng_random.c
 src:./osfmk/x86_64/loose_ends.c
 src:./pexpert/gen/bootargs.c
@@ -71,6 +73,7 @@ src:./osfmk/vm/vm_compressor.c
 fun:doublemap_init
 fun:getsegbynamefromheader
 fun:getsectbynamefromheader
+fun:getsectbynamefromseg
 
 src:./osfmk/i386/*.h
 src:./EXTERNAL_HEADERS/corecrypto/*.h
